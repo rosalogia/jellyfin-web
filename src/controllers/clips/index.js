@@ -114,7 +114,16 @@ function onDownloadClick(e) {
         ApiKey: apiClient.accessToken()
     });
 
-    window.open(url, '_blank');
+    if (window.NativeShell) {
+        const clipCard = button.closest('.clipCard');
+        const titleEl = clipCard.querySelector('.clipCardTitle');
+        const title = titleEl ? titleEl.textContent : 'Clip';
+        const filename = title + '.mp4';
+
+        window.NativeShell.downloadFile({ title, filename, url });
+    } else {
+        window.open(url, '_blank');
+    }
 }
 
 function onPreviewClick(view, e) {
@@ -122,6 +131,17 @@ function onPreviewClick(view, e) {
     if (!button) return;
 
     const clipId = button.getAttribute('data-clip-id');
+    const apiClient = getApiClient();
+    const streamUrl = apiClient.getUrl('Clips/' + clipId + '/Stream', {
+        ApiKey: apiClient.accessToken()
+    });
+
+    // On Android, open in external player via NativeShell
+    if (window.NativeShell) {
+        window.NativeShell.openUrl(streamUrl);
+        return;
+    }
+
     const clipCard = button.closest('.clipCard');
     const existingPreview = view.querySelector('.clipPreview');
 
@@ -135,12 +155,6 @@ function onPreviewClick(view, e) {
     if (existingPreview) {
         existingPreview.remove();
     }
-
-    // Create and insert new preview
-    const apiClient = getApiClient();
-    const streamUrl = apiClient.getUrl('Clips/' + clipId + '/Stream', {
-        ApiKey: apiClient.accessToken()
-    });
 
     const previewDiv = document.createElement('div');
     previewDiv.className = 'clipPreview';
