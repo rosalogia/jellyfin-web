@@ -2,6 +2,12 @@ import { LegacyRoute } from '../../../../components/router/LegacyRoute';
 
 export const LEGACY_USER_ROUTES: LegacyRoute[] = [
     {
+        path: 'clips',
+        pageProps: {
+            controller: 'clips/index',
+            view: 'clips/index.html'
+        }
+    }, {
         path: 'details',
         pageProps: {
             controller: 'itemDetails/index',
