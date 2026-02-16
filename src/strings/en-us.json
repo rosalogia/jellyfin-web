@@ -1945,5 +1945,9 @@
     "LabelPlayerSizes": "Player sizes",
     "LabelPlaybackQuality": "Frame dropped / corrupted",
     "AudioLanguages": "Audio languages",
-    "SubtitleLanguages": "Subtitle languages"
+    "SubtitleLanguages": "Subtitle languages",
+    "ClipProcessing": "Clip is being processed",
+    "MyClips": "My Clips",
+    "ClipNotSupported": "Unable to create clip",
+    "MessageNoClips": "You haven't created any clips yet. Use the record button during video playback to clip a scene."
 }

@@ -1,6 +1,7 @@
 import AccountCircle from '@mui/icons-material/AccountCircle';
 import AppSettingsAlt from '@mui/icons-material/AppSettingsAlt';
 import Close from '@mui/icons-material/Close';
+import ContentCut from '@mui/icons-material/ContentCut';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import Download from '@mui/icons-material/Download';
 import Edit from '@mui/icons-material/Edit';
@@ -101,6 +102,18 @@ const AppUserMenu: FC<AppUserMenuProps> = ({
                 </ListItemIcon>
                 <ListItemText>
                     {globalize.translate('Settings')}
+                </ListItemText>
+            </MenuItem>
+            <MenuItem
+                component={Link}
+                to='/clips'
+                onClick={onMenuClose}
+            >
+                <ListItemIcon>
+                    <ContentCut />
+                </ListItemIcon>
+                <ListItemText>
+                    {globalize.translate('MyClips')}
                 </ListItemText>
             </MenuItem>
 

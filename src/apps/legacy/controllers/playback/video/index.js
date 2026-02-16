@@ -33,6 +33,7 @@ import { ServerConnections } from 'lib/jellyfin-apiclient';
 import LibraryMenu from 'scripts/libraryMenu';
 import { setBackdropTransparency, TRANSPARENCY_LEVEL } from 'components/backdrop/backdrop';
 import { pluginManager } from 'components/pluginManager';
+import { ClipRecorder } from 'components/playback/clipRecorder';
 
 function getOpenedDialog() {
     return document.querySelector('.dialogContainer .dialog.opened');
@@ -375,6 +376,12 @@ export default function (view) {
     // TODO: Move all idle-related code to `inputManager` or `idleManager` or `idleHelper` (per dialog thing) and listen event from there.
 
     function resetIdle() {
+        // Keep OSD visible while clip recording is active
+        if (clipRecording) {
+            stopOsdHideTimer();
+            return;
+        }
+
         // Restart hide timer if OSD is currently visible and there is no opened dialog
         if (currentVisibleMenu && !mouseIsDown && !getOpenedDialog()) {
             startOsdHideTimer();
@@ -555,6 +562,16 @@ export default function (view) {
         currentRuntimeTicks = null;
         resetUpNextDialog();
         console.debug('nowplaying event: ' + e.type);
+
+        // Stop clip recording if active
+        if (clipRecorder && clipRecorder.isRecording()) {
+            clipRecorder.destroy();
+            clipRecording = false;
+            const btnClipRecord = view.querySelector('.btnClipRecord');
+            if (btnClipRecord) {
+                btnClipRecord.querySelector('.material-icons').classList.replace('stop', 'fiber_manual_record');
+            }
+        }
 
         if (state.NextMediaType !== 'Video') {
             view.removeEventListener('viewbeforehide', onViewHideStopPlayback);
@@ -782,6 +799,13 @@ export default function (view) {
             view.querySelector('.btnAirPlay').classList.add('hide');
         } else {
             view.querySelector('.btnAirPlay').classList.remove('hide');
+        }
+
+        // Show clip record button for non-live video
+        if (nowPlayingItem.MediaType === 'Video' && !enableProgressByTimeOfDay) {
+            view.querySelector('.btnClipRecord').classList.remove('hide');
+        } else {
+            view.querySelector('.btnClipRecord').classList.add('hide');
         }
 
         onFullscreenChanged();
@@ -1625,6 +1649,8 @@ export default function (view) {
     let currentItem;
     let recordingButtonManager;
     let enableProgressByTimeOfDay;
+    let clipRecorder = null;
+    let clipRecording = false;
     let currentVisibleMenu;
     let statsOverlay;
     let osdHideTimeout;
@@ -1771,6 +1797,45 @@ export default function (view) {
     view.querySelector('.btnAirPlay').addEventListener('click', function () {
         playbackManager.toggleAirPlay(currentPlayer);
     });
+    view.querySelector('.btnClipRecord').addEventListener('click', function () {
+        const iconSpan = this.querySelector('.material-icons');
+
+        if (!clipRecorder) {
+            clipRecorder = new ClipRecorder(function (recording) {
+                clipRecording = recording;
+            });
+        }
+
+        if (!clipRecorder.isRecording()) {
+            // Start recording
+            const currentTimeTicks = playbackManager.currentTime(currentPlayer) * 10000;
+            const subtitleStreamIndex = playbackManager.getSubtitleStreamIndex(currentPlayer);
+            clipRecorder.start(currentTimeTicks, currentItem.Id, currentItem.ServerId, subtitleStreamIndex);
+            iconSpan.classList.replace('fiber_manual_record', 'stop');
+
+            // Ensure playback is running
+            if (playbackManager.paused(currentPlayer)) {
+                playbackManager.playPause(currentPlayer);
+            }
+
+            // Keep OSD visible
+            stopOsdHideTimer();
+            showOsd();
+        } else {
+            // Stop recording
+            const currentTimeTicks = playbackManager.currentTime(currentPlayer) * 10000;
+            clipRecorder.stop(currentTimeTicks);
+            iconSpan.classList.replace('stop', 'fiber_manual_record');
+
+            // Pause playback
+            if (!playbackManager.paused(currentPlayer)) {
+                playbackManager.playPause(currentPlayer);
+            }
+
+            // Restore OSD auto-hide
+            resetIdle();
+        }
+    });
     view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
     view.addEventListener('viewhide', function () {
         clearHideAnimationEventListeners(headerElement);
@@ -1785,6 +1850,12 @@ export default function (view) {
         if (recordingButtonManager) {
             recordingButtonManager.destroy();
             recordingButtonManager = null;
+        }
+
+        if (clipRecorder) {
+            clipRecorder.destroy();
+            clipRecorder = null;
+            clipRecording = false;
         }
 
         destroyStats();

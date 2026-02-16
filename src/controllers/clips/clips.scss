@@ -1,0 +1,91 @@
+.clipsPage .clipsTitle {
+    margin: 0;
+}
+
+.clipsPage .clipsList {
+    display: flex;
+    flex-direction: column;
+}
+
+.clipsPage .clipCard {
+    display: flex;
+    align-items: center;
+    padding: 0.8em 1em;
+    margin-bottom: 0.5em;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+}
+
+.clipsPage .clipCard:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.clipsPage .clipCardInfo {
+    flex: 1;
+    min-width: 0;
+}
+
+.clipsPage .clipCardTitle {
+    font-size: 1.1em;
+    font-weight: 500;
+    margin: 0 0 0.25em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.clipsPage .clipCardMeta {
+    font-size: 0.85em;
+    opacity: 0.7;
+}
+
+.clipsPage .clipCardActions {
+    display: flex;
+    gap: 0.5em;
+    margin-left: 1em;
+}
+
+.clipsPage .clipStatusBadge {
+    display: inline-block;
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+    font-size: 0.75em;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.clipsPage .clipStatusBadge-pending {
+    background: #f9a825;
+    color: #000;
+}
+
+.clipsPage .clipStatusBadge-processing {
+    background: #1e88e5;
+    color: #fff;
+}
+
+.clipsPage .clipStatusBadge-ready {
+    background: #43a047;
+    color: #fff;
+}
+
+.clipsPage .clipStatusBadge-failed {
+    background: #e53935;
+    color: #fff;
+}
+
+.clipsPage .clipPreview {
+    width: 100%;
+    margin-bottom: 0.5em;
+    padding: 0.5em;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    box-sizing: border-box;
+
+    video {
+        display: block;
+        width: 100%;
+        max-height: 360px;
+        border-radius: 4px;
+    }
+}
