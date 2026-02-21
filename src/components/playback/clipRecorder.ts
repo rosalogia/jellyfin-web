@@ -9,6 +9,7 @@ export class ClipRecorder {
     private itemId: string | null = null;
     private serverId: string | null = null;
     private subtitleStreamIndex: number | null = null;
+    private audioStreamIndex: number | null = null;
     private indicatorElement: HTMLElement | null = null;
     private onStateChange: ((recording: boolean) => void) | null;
 
@@ -16,11 +17,12 @@ export class ClipRecorder {
         this.onStateChange = onStateChange || null;
     }
 
-    start(currentTimeTicks: number, itemId: string, serverId: string, subtitleStreamIndex?: number | null): void {
+    start(currentTimeTicks: number, itemId: string, serverId: string, subtitleStreamIndex?: number | null, audioStreamIndex?: number | null): void {
         this.startTimeTicks = currentTimeTicks;
         this.itemId = itemId;
         this.serverId = serverId;
         this.subtitleStreamIndex = subtitleStreamIndex ?? null;
+        this.audioStreamIndex = audioStreamIndex ?? null;
         this.recording = true;
         this.showIndicator();
         this.onStateChange?.(true);
@@ -36,10 +38,12 @@ export class ClipRecorder {
         const itemId = this.itemId;
         const serverId = this.serverId;
         const subtitleStreamIndex = this.subtitleStreamIndex;
+        const audioStreamIndex = this.audioStreamIndex;
 
         this.recording = false;
         this.startTimeTicks = null;
         this.subtitleStreamIndex = null;
+        this.audioStreamIndex = null;
         this.hideIndicator();
         this.onStateChange?.(false);
 
@@ -58,6 +62,10 @@ export class ClipRecorder {
 
             if (subtitleStreamIndex != null && subtitleStreamIndex >= 0) {
                 params.subtitleStreamIndex = subtitleStreamIndex.toString();
+            }
+
+            if (audioStreamIndex != null && audioStreamIndex >= 0) {
+                params.audioStreamIndex = audioStreamIndex.toString();
             }
 
             const url = apiClient.getUrl('Clips', params);

@@ -1810,7 +1810,8 @@ export default function (view) {
             // Start recording
             const currentTimeTicks = playbackManager.currentTime(currentPlayer) * 10000;
             const subtitleStreamIndex = playbackManager.getSubtitleStreamIndex(currentPlayer);
-            clipRecorder.start(currentTimeTicks, currentItem.Id, currentItem.ServerId, subtitleStreamIndex);
+            const audioStreamIndex = playbackManager.getAudioStreamIndex(currentPlayer);
+            clipRecorder.start(currentTimeTicks, currentItem.Id, currentItem.ServerId, subtitleStreamIndex, audioStreamIndex);
             iconSpan.classList.replace('fiber_manual_record', 'stop');
 
             // Ensure playback is running
