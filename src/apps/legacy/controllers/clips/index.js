@@ -3,7 +3,6 @@ import escapeHtml from 'escape-html';
 import { ServerConnections } from 'lib/jellyfin-apiclient';
 import globalize from 'lib/globalize';
 import datetime from 'scripts/datetime';
-import toast from 'components/toast/toast';
 import confirm from 'components/confirm/confirm';
 import loading from 'components/loading/loading';
 import './clips.scss';

@@ -54,6 +54,10 @@ export class ClipRecorder {
 
         try {
             const apiClient = ServerConnections.getApiClient(serverId);
+            if (!apiClient) {
+                throw new Error(`No API client for server ${serverId}`);
+            }
+
             const params: Record<string, string> = {
                 itemId: itemId,
                 startTicks: startTicks.toString(),
