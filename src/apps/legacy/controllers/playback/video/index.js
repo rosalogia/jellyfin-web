@@ -35,6 +35,15 @@ import LibraryMenu from 'scripts/libraryMenu';
 import { setBackdropTransparency, TRANSPARENCY_LEVEL } from 'components/backdrop/backdrop';
 import { pluginManager } from 'components/pluginManager';
 import { ClipRecorder } from 'components/playback/clipRecorder';
+import {
+    StudySubtitleOverlay,
+    STUDY_MODES,
+    fetchStudySubtitles,
+    getStoredStudyMode,
+    getStudyModeName,
+    storeStudyMode
+} from 'components/studySubtitles/studySubtitles';
+import toast from 'components/toast/toast';
 
 function getOpenedDialog() {
     return document.querySelector('.dialogContainer .dialog.opened');
@@ -530,6 +539,10 @@ export default function (view) {
     }
 
     function onPlayPauseStateChanged() {
+        if (studyOverlay) {
+            studyOverlay.setPaused(this.paused());
+        }
+
         if (isEnabled) {
             updatePlayPauseState(this.paused());
         }
@@ -563,6 +576,9 @@ export default function (view) {
         currentRuntimeTicks = null;
         resetUpNextDialog();
         console.debug('nowplaying event: ' + e.type);
+
+        destroyStudySubtitles();
+        studyItem = null;
 
         // Stop clip recording if active
         if (clipRecorder && clipRecorder.isRecording()) {
@@ -672,6 +688,10 @@ export default function (view) {
     }
 
     function onTimeUpdate() {
+        if (studyOverlay) {
+            studyOverlay.update(playbackManager.currentTime(this));
+        }
+
         // Test for 'currentItem' is required for Firefox since its player spams 'timeupdate' events even being at breakpoint
         if (isEnabled && currentItem) {
             const now = new Date().getTime();
@@ -832,6 +852,13 @@ export default function (view) {
             view.querySelector('.btnClipRecord').classList.remove('hide');
         } else {
             view.querySelector('.btnClipRecord').classList.add('hide');
+        }
+
+        // Chinese study subtitles, for non-live video
+        const showStudyButton = nowPlayingItem.MediaType === 'Video' && !enableProgressByTimeOfDay;
+        view.querySelector('.btnStudySubs').classList.toggle('hide', !showStudyButton);
+        if (showStudyButton) {
+            onStudyItemChanged(player, nowPlayingItem);
         }
 
         onFullscreenChanged();
@@ -1679,6 +1706,9 @@ export default function (view) {
     let enableProgressByTimeOfDay;
     let clipRecorder = null;
     let clipRecording = false;
+    let studyOverlay = null;
+    let studyItem = null;
+    let studyLoading = false;
     let currentVisibleMenu;
     let statsOverlay;
     let osdHideTimeout;
@@ -1865,6 +1895,168 @@ export default function (view) {
             resetIdle();
         }
     });
+    function getVideoElement() {
+        return document.querySelector('.videoPlayerContainer video');
+    }
+
+    function updateStudyButtonState() {
+        const active = !!studyOverlay && studyOverlay.getMode() !== 'off';
+        view.querySelector('.btnStudySubs').classList.toggle('studySubsActive', active);
+    }
+
+    function destroyStudySubtitles() {
+        window.removeEventListener('keydown', onStudyKeyDown, true);
+        if (studyOverlay) {
+            studyOverlay.destroy();
+            studyOverlay = null;
+        }
+        updateStudyButtonState();
+    }
+
+    function onStudyItemChanged(player, item) {
+        if (!item.Id || (studyItem && studyItem.Id === item.Id)) {
+            return;
+        }
+
+        destroyStudySubtitles();
+        studyItem = item;
+        const mode = getStoredStudyMode(item);
+        if (mode !== 'off') {
+            setStudyMode(mode, player, true);
+        }
+    }
+
+    async function setStudyMode(mode, player, quiet) {
+        const item = studyItem;
+        if (!item) {
+            return;
+        }
+
+        storeStudyMode(item, mode);
+        if (mode === 'off') {
+            destroyStudySubtitles();
+            return;
+        }
+
+        if (!studyOverlay) {
+            if (studyLoading) {
+                return;
+            }
+
+            studyLoading = true;
+            let data;
+            try {
+                const mediaSource = playbackManager.currentMediaSource(player);
+                data = await fetchStudySubtitles(item, mediaSource ? mediaSource.Id : null);
+            } finally {
+                studyLoading = false;
+            }
+
+            // The item may have changed while loading
+            if (studyItem !== item || studyOverlay) {
+                return;
+            }
+
+            if (!data) {
+                storeStudyMode(item, 'off');
+                if (!quiet) {
+                    toast(globalize.translate('StudySubtitlesNotFound'));
+                }
+                return;
+            }
+
+            studyOverlay = new StudySubtitleOverlay({
+                container: view,
+                data,
+                getVideoElement,
+                // The OSD's top padding is just the gradient above the controls; only clear the controls themselves
+                getOsdHeight: () => osdBottomElement.offsetHeight - (parseFloat(getComputedStyle(osdBottomElement).paddingTop) || 0),
+                onRequestPause: () => {
+                    if (!playbackManager.paused(currentPlayer)) {
+                        playbackManager.pause(currentPlayer);
+                    }
+                }
+            });
+            studyOverlay.setPaused(playbackManager.paused(player));
+            studyOverlay.update(playbackManager.currentTime(player));
+            window.addEventListener('keydown', onStudyKeyDown, true);
+        }
+
+        studyOverlay.setMode(mode);
+        updateStudyButtonState();
+    }
+
+    /**
+     * Remote/keyboard handling for looking up words while paused. Registered on window in the capture phase so it
+     * runs before the page's own handlers (which would seek on left/right and navigate back on Back).
+     */
+    function onStudyKeyDown(e) {
+        if (!studyOverlay || e.ctrlKey || e.altKey || e.metaKey || getOpenedDialog()) {
+            return;
+        }
+
+        const key = keyboardnavigation.getKeyName(e);
+        if (studyOverlay.isInWordMode()) {
+            const result = studyOverlay.handleKey(key);
+            if (result !== 'ignored') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (result === 'exit') {
+                    showOsd(osdBottomElement.querySelector('.btnPause'));
+                }
+            }
+            return;
+        }
+
+        // While paused, Up moves into the subtitle line: from the timeline, or from anywhere when the OSD is hidden
+        if ((key === 'ArrowUp' || key === 'Up')
+            && (document.activeElement === nowPlayingPositionSlider || currentVisibleMenu !== 'osd')
+            && playbackManager.paused(currentPlayer)
+            && studyOverlay.getMode() !== 'off'
+            && studyOverlay.enterWordMode()) {
+            e.preventDefault();
+            e.stopPropagation();
+            nowPlayingPositionSlider.blur();
+        }
+    }
+
+    view.querySelector('.btnStudySubs').addEventListener('click', function () {
+        const player = currentPlayer;
+        const currentMode = studyOverlay ? studyOverlay.getMode() : 'off';
+        const items = STUDY_MODES.map(mode => ({
+            name: getStudyModeName(mode),
+            id: mode,
+            selected: mode === currentMode
+        }));
+        if (currentMode !== 'off') {
+            items.push({ divider: true }, { name: globalize.translate('StudyLookUpWords'), id: 'lookup' });
+        }
+
+        import('components/actionSheet/actionSheet').then(({ default: actionsheet }) => {
+            actionsheet.show({
+                title: globalize.translate('StudySubtitles'),
+                items,
+                positionTo: this
+            }).then(function (id) {
+                if (id === 'lookup') {
+                    if (!playbackManager.paused(player)) {
+                        playbackManager.pause(player);
+                    }
+                    // Let the pause event arrive before placing the word cursor
+                    setTimeout(() => {
+                        if (studyOverlay && !studyOverlay.enterWordMode()) {
+                            toast(globalize.translate('StudyNoLine'));
+                        }
+                    }, 100);
+                } else if (id) {
+                    setStudyMode(id, player, false);
+                }
+            }).finally(() => {
+                resetIdle();
+            });
+        });
+    });
+
     view.querySelector('.btnVideoOsdSettings').addEventListener('click', onSettingsButtonClick);
     view.addEventListener('viewhide', function () {
         clearHideAnimationEventListeners(headerElement);
@@ -1887,6 +2079,9 @@ export default function (view) {
             clipRecording = false;
         }
 
+        destroyStudySubtitles();
+        studyItem = null;
+
         destroyStats();
         destroySubtitleSync();
     });
@@ -1895,6 +2090,11 @@ export default function (view) {
     dom.addEventListener(view, window.PointerEvent ? 'pointerdown' : 'click', function (e) {
         if (dom.parentWithClass(e.target, ['videoOsdBottom', 'upNextContainer'])) {
             showOsd();
+            return;
+        }
+
+        // Taps on study subtitle words open the word card instead of toggling the OSD
+        if (dom.parentWithClass(e.target, ['studyWord', 'studyWordCard'])) {
             return;
         }
 

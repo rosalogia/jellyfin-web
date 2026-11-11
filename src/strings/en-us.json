@@ -1951,5 +1951,14 @@
     "ClipProcessing": "Clip is being processed",
     "MyClips": "My Clips",
     "ClipNotSupported": "Unable to create clip",
-    "MessageNoClips": "You haven't created any clips yet. Use the record button during video playback to clip a scene."
+    "MessageNoClips": "You haven't created any clips yet. Use the record button during video playback to clip a scene.",
+    "StudySubtitles": "Chinese study subtitles",
+    "StudyModeChinese": "Chinese",
+    "StudyModeChinesePinyin": "Chinese + pinyin",
+    "StudyModeChineseEnglish": "Chinese + English",
+    "StudyModeAll": "Chinese + pinyin + English",
+    "StudyLookUpWords": "Look up words",
+    "StudyNoLine": "No subtitle on screen right now",
+    "StudyNoDefinition": "Not in the dictionary",
+    "StudySubtitlesNotFound": "No Chinese subtitles found for this video"
 }

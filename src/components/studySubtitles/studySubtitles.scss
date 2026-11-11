@@ -1,0 +1,178 @@
+.studySubtitles {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    color: #fff;
+}
+
+.studySubtitlesMask {
+    position: fixed;
+    background: #000;
+}
+
+.studySubtitlesLine {
+    position: fixed;
+    left: 5%;
+    right: 5%;
+    text-align: center;
+    text-shadow: 0 0 4px #000, 0 0 2px #000;
+    transition: bottom 0.2s ease;
+}
+
+.studySubtitlesText {
+    display: inline-block;
+    font-size: 2.6em;
+    line-height: 1.5;
+    pointer-events: auto;
+}
+
+.layout-tv .studySubtitlesText {
+    font-size: 3.2em;
+}
+
+.layout-mobile .studySubtitlesText {
+    font-size: 1.8em;
+}
+
+.studySubtitlesText ruby {
+    ruby-position: over;
+}
+
+.studySubtitlesText rt {
+    display: none;
+    font-size: 0.42em;
+    letter-spacing: 0.02em;
+}
+
+.studySubtitles-pinyin .studySubtitlesText rt {
+    display: revert;
+}
+
+.studySubtitlesTranslation {
+    display: none;
+    font-size: 1.5em;
+    margin-top: 0.2em;
+    color: #e6e6e6;
+}
+
+.layout-mobile .studySubtitlesTranslation {
+    font-size: 1.1em;
+}
+
+.studySubtitles-english .studySubtitlesTranslation:not(:empty) {
+    display: block;
+}
+
+.studyWord {
+    border-radius: 0.15em;
+    padding: 0 0.04em;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.studySubtitles-interactive .studyWord {
+    background: rgba(255, 255, 255, 0.08);
+    margin: 0 0.04em;
+}
+
+@media (hover: hover) {
+    .studyWord:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+}
+
+.studyWord-selected,
+.studyWord-selected:hover {
+    background: rgba(0, 164, 220, 0.55);
+    outline: 0.06em solid #00a4dc;
+}
+
+.studyWordCard {
+    position: fixed;
+    max-width: min(32em, calc(100vw - 32px));
+    padding: 0.9em 1.1em;
+    border-radius: 0.6em;
+    background: rgba(20, 20, 20, 0.94);
+    box-shadow: 0 0.3em 1.5em rgba(0, 0, 0, 0.6);
+    pointer-events: auto;
+    text-shadow: none;
+    font-size: 1.1em;
+    line-height: 1.4;
+    text-align: left;
+}
+
+.layout-tv .studyWordCard {
+    font-size: 1.5em;
+}
+
+.studyWordCard-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em;
+    flex-wrap: wrap;
+}
+
+.studyWordCard-word {
+    font-size: 2em;
+}
+
+.studyWordCard-pinyin {
+    font-size: 1.3em;
+}
+
+.studyWordCard-gloss {
+    margin-top: 0.3em;
+    font-weight: 600;
+}
+
+.studyWordCard-entries {
+    margin-top: 0.5em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35em;
+}
+
+.studyWordCard-entryPinyin {
+    font-weight: 600;
+    margin-right: 0.5em;
+}
+
+.studyWordCard-variant {
+    opacity: 0.6;
+    margin-right: 0.5em;
+}
+
+.studyWordCard-definitions {
+    opacity: 0.9;
+}
+
+.studyWordCard-line {
+    margin-top: 0.7em;
+    padding-top: 0.6em;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    opacity: 0.85;
+}
+
+.studyWordCard-notes {
+    margin-top: 0.3em;
+    font-style: italic;
+}
+
+// Tone colors (Pleco-style) for the dictionary card.
+.studyTone1 { color: #ff6b6b; }
+.studyTone2 { color: #ffb347; }
+.studyTone3 { color: #6bd66b; }
+.studyTone4 { color: #6bb7ff; }
+.studyTone5 { color: #bbb; }
+
+// Hide the player's own subtitle elements while study subtitles are shown (native text tracks are hidden in code).
+.studySubtitlesActive {
+    .videoSubtitles,
+    .libassjs-canvas-parent {
+        visibility: hidden !important;
+    }
+}
+
+.btnStudySubs.studySubsActive .material-icons {
+    color: #00a4dc;
+}
