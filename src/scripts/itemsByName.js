@@ -1,4 +1,5 @@
 import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-item-kind';
+import { PersonKind } from '@jellyfin/sdk/lib/generated-client/models/person-kind';
 
 import listView from 'components/listview/listview';
 import cardBuilder from 'components/cardbuilder/cardBuilder';
@@ -9,7 +10,7 @@ import { ServerConnections } from 'lib/jellyfin-apiclient';
 import 'elements/emby-itemscontainer/emby-itemscontainer';
 import 'elements/emby-button/emby-button';
 
-function renderItems(page, item) {
+function renderItems(page, item, user) {
     const sections = [];
 
     if (item.ArtistCount) {
@@ -68,6 +69,17 @@ function renderItems(page, item) {
         });
     }
 
+    sections.push({
+        name: globalize.translate('HeaderAudioBooks'),
+        type: 'Audiobook'
+    });
+
+    // TODO add a check when the API reports BookCount or PersonRoles
+    sections.push({
+        name: globalize.translate('Books'),
+        type: 'Book'
+    });
+
     const elem = page.querySelector('#childrenContent');
     elem.innerHTML = sections.map(function (section) {
         let html = '';
@@ -92,11 +104,11 @@ function renderItems(page, item) {
     const sectionElems = elem.querySelectorAll('.verticalSection');
 
     for (let i = 0, length = sectionElems.length; i < length; i++) {
-        renderSection(item, sectionElems[i], sectionElems[i].getAttribute('data-type'));
+        renderSection(item, sectionElems[i], sectionElems[i].getAttribute('data-type'), user);
     }
 }
 
-function renderSection(item, element, type) {
+function renderSection(item, element, type, user) {
     switch (type) {
         case 'Program':
             loadItems(element, item, type, {
@@ -211,6 +223,38 @@ function renderSection(item, element, type) {
             });
             break;
 
+        case 'Audiobook':
+            loadItems(element, item, type, {
+                IncludeItemTypes: 'Audiobook',
+                SortBy: 'ProductionYear,SortName',
+                SortOrder: 'Descending,Ascending',
+                Limit: 10
+            }, {
+                shape: 'overflowPortrait',
+                showTitle: true,
+                centerText: true,
+                overlayMoreButton: true,
+                overlayText: false,
+                showYear: true
+            });
+            break;
+
+        case 'Book':
+            loadItems(element, item, type, {
+                IncludeItemTypes: 'Book',
+                SortBy: 'ProductionYear,SortName',
+                SortOrder: 'Descending,Ascending',
+                Limit: 10
+            }, {
+                shape: 'overflowPortrait',
+                showTitle: true,
+                centerText: true,
+                overlayMoreButton: true,
+                overlayText: false,
+                showYear: true
+            });
+            break;
+
         case 'MusicArtist':
             loadItems(element, item, type, {
                 MediaTypes: '',
@@ -239,7 +283,8 @@ function renderSection(item, element, type) {
                 ArtistIds: '',
                 AlbumArtistIds: '',
                 Limit: 6,
-                SortBy: 'SortName'
+                SortBy: 'SortName',
+                isMissing: !user?.Configuration?.DisplayMissingEpisodes ? false : undefined
             }, {
                 shape: 'overflowBackdrop',
                 showTitle: true,
@@ -379,7 +424,7 @@ function getItemsFunction(options, item) {
 
         if (query.IncludeItemTypes === 'MusicArtist') {
             query.IncludeItemTypes = null;
-            return apiClient.getAlbumArtists(apiClient.getCurrentUserId(), query);
+            return apiClient.getPeople(apiClient.getCurrentUserId(), { ...query, PersonTypes: PersonKind.AlbumArtist });
         }
 
         return apiClient.getItems(apiClient.getCurrentUserId(), query);

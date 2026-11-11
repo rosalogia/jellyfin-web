@@ -2,13 +2,12 @@ import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-ite
 import { getLibraryApi } from '@jellyfin/sdk/lib/utils/api/library-api';
 
 import { AppFeature } from 'constants/appFeature';
-import { toApi } from 'utils/jellyfin-apiclient/compat';
+import { ServerConnections } from 'lib/jellyfin-apiclient';
 
 import browser from '../scripts/browser';
 import { copy } from '../scripts/clipboard';
 import dom from '../utils/dom';
 import globalize from '../lib/globalize';
-import { ServerConnections } from 'lib/jellyfin-apiclient';
 import actionsheet from './actionSheet/actionSheet';
 import { appHost } from './apphost';
 import { appRouter } from './router/appRouter';
@@ -307,28 +306,29 @@ export async function getCommands(options) {
         });
     }
 
+    // Only show playlist edit actions if the user can modify the playlist
     if (item.PlaylistItemId && options.playlistId && options.canEditPlaylist) {
         commands.push({
             name: globalize.translate('RemoveFromPlaylist'),
             id: 'removefromplaylist',
             icon: 'playlist_remove'
         });
-    }
 
-    if (item.PlaylistItemId && options.playlistId && item.PlaylistIndex > 0) {
-        commands.push({
-            name: globalize.translate('MoveToTop'),
-            id: 'movetotop',
-            icon: 'vertical_align_top'
-        });
-    }
+        if (item.PlaylistIndex > 0) {
+            commands.push({
+                name: globalize.translate('MoveToTop'),
+                id: 'movetotop',
+                icon: 'vertical_align_top'
+            });
+        }
 
-    if (item.PlaylistItemId && options.playlistId && item.PlaylistIndex < (item.PlaylistItemCount - 1)) {
-        commands.push({
-            name: globalize.translate('MoveToBottom'),
-            id: 'movetobottom',
-            icon: 'vertical_align_bottom'
-        });
+        if (item.PlaylistIndex < (item.PlaylistItemCount - 1)) {
+            commands.push({
+                name: globalize.translate('MoveToBottom'),
+                id: 'movetobottom',
+                icon: 'vertical_align_bottom'
+            });
+        }
     }
 
     if (options.collectionId) {
@@ -390,7 +390,7 @@ function executeCommand(item, id, options) {
     const itemId = item.Id;
     const serverId = item.ServerId;
     const apiClient = ServerConnections.getApiClient(serverId);
-    const api = toApi(apiClient);
+    const api = ServerConnections.getApi(serverId);
 
     return new Promise(function (resolve, reject) {
         // eslint-disable-next-line sonarjs/max-switch-cases

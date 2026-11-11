@@ -1,17 +1,17 @@
 import React, { type FC, useCallback } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryKey, useQueryClient } from '@tanstack/react-query';
 import IconButton from '@mui/material/IconButton';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 
+import { useToggleFavoriteMutation } from 'apps/modern/features/libraries/hooks/api/useToggleFavorite';
 import { ItemAction } from 'constants/itemAction';
-import { useToggleFavoriteMutation } from 'hooks/useFetchItems';
 import globalize from 'lib/globalize';
 
 interface FavoriteButtonProps {
     className?: string;
     isFavorite: boolean | undefined;
     itemId: string | null | undefined;
-    queryKey?: string[]
+    queryKey?: QueryKey
 }
 
 const FavoriteButton: FC<FavoriteButtonProps> = ({

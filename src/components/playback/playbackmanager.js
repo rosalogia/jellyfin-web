@@ -1,10 +1,12 @@
 import { BaseItemKind } from '@jellyfin/sdk/lib/generated-client/models/base-item-kind';
+import { ItemFields } from '@jellyfin/sdk/lib/generated-client/models/item-fields';
 import { ItemFilter } from '@jellyfin/sdk/lib/generated-client/models/item-filter';
 import { ItemSortBy } from '@jellyfin/sdk/lib/generated-client/models/item-sort-by';
+import { LocationType } from '@jellyfin/sdk/lib/generated-client/models/location-type';
 import { MediaType } from '@jellyfin/sdk/lib/generated-client/models/media-type';
+import { PlaybackOrder } from '@jellyfin/sdk/lib/generated-client/models/playback-order';
 import { PlaybackErrorCode } from '@jellyfin/sdk/lib/generated-client/models/playback-error-code';
 import { getMediaInfoApi } from '@jellyfin/sdk/lib/utils/api/media-info-api';
-import merge from 'lodash-es/merge';
 import Screenfull from 'screenfull';
 
 import Events from '../../utils/events.ts';
@@ -18,20 +20,23 @@ import globalize from '../../lib/globalize';
 import loading from '../loading/loading';
 import { appHost } from '../apphost';
 import alert from '../alert';
-import { PluginType } from '../../types/plugin.ts';
 import { includesAny } from '../../utils/container.ts';
-import { getItems } from '../../utils/jellyfin-apiclient/getItems.ts';
-import { getItemBackdropImageUrl } from '../../utils/jellyfin-apiclient/backdropImage';
+import { getItems } from 'lib/jellyfin-apiclient/utils/getItems';
+import { getItemBackdropImageUrl } from 'lib/jellyfin-apiclient/utils/backdropImage';
+import { toItemsRequest } from 'lib/jellyfin-apiclient/utils/legacyItemsQuery';
 
-import { PlayerEvent } from 'apps/stable/features/playback/constants/playerEvent';
-import { bindMediaSegmentManager } from 'apps/stable/features/playback/utils/mediaSegmentManager';
-import { bindMediaSessionSubscriber } from 'apps/stable/features/playback/utils/mediaSessionSubscriber';
+import { PlayerEvent } from 'apps/legacy/features/playback/constants/playerEvent';
+import { bindMediaSegmentManager } from 'apps/legacy/features/playback/utils/mediaSegmentManager';
+import { bindMediaSessionSubscriber } from 'apps/legacy/features/playback/utils/mediaSessionSubscriber';
 import { AppFeature } from 'constants/appFeature';
+import { PluginType } from 'constants/pluginType';
+import { TICKS_PER_SECOND } from 'constants/time';
 import { ServerConnections } from 'lib/jellyfin-apiclient';
+import { OutboundWebSocketMessageType } from '@jellyfin/sdk/lib/websocket';
 import { MediaError } from 'types/mediaError';
 import { getMediaError } from 'utils/mediaError';
-import { toApi } from 'utils/jellyfin-apiclient/compat';
 import { bindSkipSegment } from './skipsegment.ts';
+import * as bitrateTest from 'utils/bitrateTest';
 
 const UNLIMITED_ITEMS = -1;
 
@@ -50,12 +55,12 @@ function supportsPhysicalVolumeControl(player) {
 function bindToFullscreenChange(player) {
     if (Screenfull.isEnabled) {
         Screenfull.on('change', function () {
-            Events.trigger(player, 'fullscreenchange');
+            Events.trigger(player, 'fullscreenchange', [Screenfull.isFullscreen]);
         });
     } else {
         // iOS Safari
         document.addEventListener('webkitfullscreenchange', function () {
-            Events.trigger(player, 'fullscreenchange');
+            Events.trigger(player, 'fullscreenchange', [document.webkitIsFullScreen]);
         }, false);
     }
 }
@@ -127,30 +132,38 @@ function normalizeName(t) {
     return t.toLowerCase().replace(' ', '');
 }
 
+/**
+ * Gets the items to play.
+ * @param {string} serverId The server id.
+ * @param {import('@jellyfin/sdk/lib/generated-client/api/library-api').LibraryApiGetItemsRequest} query The getItems request parameters.
+ */
 function getItemsForPlayback(serverId, query) {
     const apiClient = ServerConnections.getApiClient(serverId);
 
-    if (query.Ids && query.Ids.split(',').length === 1) {
-        const itemId = query.Ids.split(',');
-
-        return apiClient.getItem(apiClient.getCurrentUserId(), itemId).then(function (item) {
+    if (query.ids?.length === 1) {
+        return apiClient.getItem(apiClient.getCurrentUserId(), query.ids[0]).then(function (item) {
             return {
                 Items: [item],
                 TotalRecordCount: 1
             };
         });
     } else {
-        if (query.Limit === UNLIMITED_ITEMS) {
-            delete query.Limit;
-        } else {
-            query.Limit = query.Limit || 300;
-        }
-        query.Fields = ['Chapters', 'Trickplay'];
-        query.ExcludeLocationTypes = 'Virtual';
-        query.EnableTotalRecordCount = false;
-        query.CollapseBoxSetItems = false;
+        const request = {
+            ...query,
+            userId: apiClient.getCurrentUserId(),
+            fields: [ItemFields.Chapters, ItemFields.MediaSources, ItemFields.Trickplay],
+            excludeLocationTypes: [LocationType.Virtual],
+            enableTotalRecordCount: false,
+            collapseBoxSetItems: false
+        };
 
-        return getItems(apiClient, apiClient.getCurrentUserId(), query);
+        if (query.limit === UNLIMITED_ITEMS) {
+            delete request.limit;
+        } else {
+            request.limit = query.limit || 300;
+        }
+
+        return getItems(ServerConnections.getApi(serverId), request);
     }
 }
 
@@ -163,17 +176,6 @@ function createStreamInfoFromUrlItem(item) {
         textTracks: [],
         mediaType: item.MediaType
     };
-}
-
-function mergePlaybackQueries(obj1, obj2) {
-    const query = merge({}, obj1, obj2);
-
-    const filters = query.Filters?.split(',') || [];
-    if (!filters.includes(ItemFilter.IsNotFolder)) {
-        filters.push(ItemFilter.IsNotFolder);
-    }
-    query.Filters = filters.join(',');
-    return query;
 }
 
 function getMimeType(type, container) {
@@ -438,8 +440,7 @@ async function getPlaybackInfo(player, apiClient, item, deviceProfile, mediaSour
         StartTimeTicks: options.startPosition || 0
     };
 
-    const api = toApi(apiClient);
-    const mediaInfoApi = getMediaInfoApi(api);
+    const api = ServerConnections.getApi(apiClient.serverId());
 
     if (options.isPlayback) {
         query.IsPlayback = true;
@@ -498,7 +499,7 @@ async function getPlaybackInfo(player, apiClient, item, deviceProfile, mediaSour
 
     query.DeviceProfile = deviceProfile;
 
-    const res = await mediaInfoApi.getPostedPlaybackInfo({ itemId: itemId, playbackInfoDto: query });
+    const res = await getMediaInfoApi(api).getPostedPlaybackInfo({ itemId: itemId, playbackInfoDto: query });
     return res.data;
 }
 
@@ -515,6 +516,14 @@ function getOptimalMediaSource(apiClient, item, versions) {
         for (let i = 0, length = versions.length; i < length; i++) {
             versions[i].enableDirectPlay = results[i] || false;
         }
+
+        // Prefer the played item's own source, transcoding it if needed, over another version
+        const ownSource = versions.find(v => v.Id === item.Id);
+
+        if (ownSource && (ownSource.enableDirectPlay || ownSource.SupportsDirectStream || ownSource.SupportsTranscoding)) {
+            return ownSource;
+        }
+
         let optimalVersion = versions.filter(function (v) {
             return v.enableDirectPlay;
         })[0];
@@ -874,10 +883,15 @@ export class PlaybackManager {
         self.trackHasSecondarySubtitleSupport = function (track, player = self._currentPlayer) {
             if (!player || !track) return false;
             const format = (track.Codec || '').toLowerCase();
-            // Currently, only non-SSA/non-ASS external subtitles are supported.
-            // Showing secondary subtitles does not work with any SSA/ASS subtitle combinations because
-            // of the complexity of how they are rendered and the risk of the subtitles overlapping
-            return format !== 'ssa' && format !== 'ass' && getDeliveryMethod(track) === 'External';
+            // Secondary subtitle pairing does not work with SSA/ASS combinations because
+            // of the complexity of how they are rendered and the risk of the subtitles overlapping.
+            // Graphical subtitle formats are supported generally, but not for secondary pairing here.
+            return format !== 'ssa'
+                && format !== 'ass'
+                && format !== 'pgssub'
+                && format !== 'dvdsub'
+                && format !== 'vobsub'
+                && getDeliveryMethod(track) === 'External';
         };
 
         self.secondarySubtitleTracks = function (player = self._currentPlayer) {
@@ -1397,6 +1411,7 @@ export class PlaybackManager {
                 return player.setMaxStreamingBitrate(options);
             }
 
+            const api = ServerConnections.getApi(self.currentItem(player).ServerId);
             const apiClient = ServerConnections.getApiClient(self.currentItem(player).ServerId);
 
             apiClient.getEndpointInfo().then(function (endpointInfo) {
@@ -1406,7 +1421,7 @@ export class PlaybackManager {
                 let promise;
                 if (options.enableAutomaticBitrateDetection) {
                     appSettings.enableAutomaticBitrateDetection(endpointInfo.IsInNetwork, mediaType, true);
-                    promise = apiClient.detectBitrate(true);
+                    promise = bitrateTest.detectBitrate(api, true);
                 } else {
                     appSettings.enableAutomaticBitrateDetection(endpointInfo.IsInNetwork, mediaType, false);
                     promise = Promise.resolve(options.maxBitrate);
@@ -1739,6 +1754,8 @@ export class PlaybackManager {
 
                 getPlaybackInfo(player, apiClient, currentItem, deviceProfile, currentMediaSource.Id, liveStreamId, options).then(function (result) {
                     if (validatePlaybackInfoResult(self, result)) {
+                        // Changing streams requests only the active source; keep the version availability flag.
+                        result.MediaSources[0].hasAlternateVersions = currentMediaSource.hasAlternateVersions;
                         currentMediaSource = result.MediaSources[0];
 
                         const streamInfo = createStreamInfo(apiClient, currentItem.MediaType, currentItem, currentMediaSource, ticks, player);
@@ -1809,9 +1826,7 @@ export class PlaybackManager {
 
             const firstItem = items[0];
             const serverId = firstItem.ServerId;
-            const queryOptions = options.queryOptions || {};
-
-            const promise = getPlaybackPromise(firstItem, serverId, options, queryOptions, items);
+            const promise = getPlaybackPromise(firstItem, serverId, options, items);
 
             if (promise) {
                 const result = await promise;
@@ -1830,72 +1845,86 @@ export class PlaybackManager {
             }
         }
 
-        function getPlaybackPromise(firstItem, serverId, options, queryOptions, items) {
-            const SortBy = options.shuffle ? ItemSortBy.Random : ItemSortBy.SortName;
+        function getPlaybackPromise(firstItem, serverId, options, items) {
+            const sortBy = options.shuffle ? ItemSortBy.Random : ItemSortBy.SortName;
+
+            // `queryOptions` are legacy-shaped (see toItemsRequest). Convert them once and spread them over each
+            // query below so they take precedence over the defaults.
+            const queryOptions = toItemsRequest(options.queryOptions);
+            // Playback queues never contain folders, whatever filters the options replace.
+            if (!queryOptions.filters?.includes(ItemFilter.IsNotFolder)) {
+                queryOptions.filters = [...(queryOptions.filters || []), ItemFilter.IsNotFolder];
+            }
 
             switch (firstItem.Type) {
                 case BaseItemKind.Program:
                     return getItemsForPlayback(serverId, {
-                        Ids: firstItem.ChannelId
+                        ids: firstItem.ChannelId ? [firstItem.ChannelId] : undefined
                     });
                 case BaseItemKind.Playlist:
                     return getItemsForPlayback(serverId, {
-                        ParentId: firstItem.Id,
-                        SortBy: options.shuffle ? SortBy : undefined
+                        parentId: firstItem.Id,
+                        sortBy: options.shuffle ? [sortBy] : undefined
                     });
                 case BaseItemKind.MusicArtist:
 
-                    return getItemsForPlayback(serverId, mergePlaybackQueries({
-                        ArtistIds: firstItem.Id,
-                        Recursive: true,
-                        SortBy: options.shuffle ? SortBy : [
+                    return getItemsForPlayback(serverId, {
+                        artistIds: [firstItem.Id],
+                        recursive: true,
+                        sortBy: options.shuffle ? [sortBy] : [
                             ItemSortBy.Album,
                             ItemSortBy.ParentIndexNumber,
                             ItemSortBy.IndexNumber,
                             ItemSortBy.SortName
-                        ].join(','),
-                        MediaTypes: MediaType.Audio
-                    }, queryOptions));
+                        ],
+                        mediaTypes: [MediaType.Audio],
+                        ...queryOptions
+                    });
                 case BaseItemKind.PhotoAlbum:
-                    return getItemsForPlayback(serverId, mergePlaybackQueries({
-                        ParentId: firstItem.Id,
+                    return getItemsForPlayback(serverId, {
+                        parentId: firstItem.Id,
                         // Setting this to true may cause some incorrect sorting
-                        Recursive: false,
-                        SortBy,
+                        recursive: false,
+                        sortBy: [sortBy],
                         // Only include Photos because we do not handle mixed queues currently
-                        MediaTypes: MediaType.Photo,
-                        Limit: UNLIMITED_ITEMS
-                    }, queryOptions));
+                        mediaTypes: [MediaType.Photo],
+                        limit: UNLIMITED_ITEMS,
+                        ...queryOptions
+                    });
                 case BaseItemKind.MusicGenre:
-                    return getItemsForPlayback(serverId, mergePlaybackQueries({
-                        GenreIds: firstItem.Id,
-                        Recursive: true,
-                        SortBy,
-                        MediaTypes: MediaType.Audio
-                    }, queryOptions));
+                    return getItemsForPlayback(serverId, {
+                        genreIds: [firstItem.Id],
+                        recursive: true,
+                        sortBy: [sortBy],
+                        mediaTypes: [MediaType.Audio],
+                        ...queryOptions
+                    });
                 case BaseItemKind.Genre:
-                    return getItemsForPlayback(serverId, mergePlaybackQueries({
-                        GenreIds: firstItem.Id,
-                        ParentId: firstItem.ParentId,
-                        Recursive: true,
-                        SortBy,
-                        MediaTypes: MediaType.Video
-                    }, queryOptions));
+                    return getItemsForPlayback(serverId, {
+                        genreIds: [firstItem.Id],
+                        parentId: firstItem.ParentId,
+                        recursive: true,
+                        sortBy: [sortBy],
+                        mediaTypes: [MediaType.Video],
+                        ...queryOptions
+                    });
                 case BaseItemKind.Studio:
-                    return getItemsForPlayback(serverId, mergePlaybackQueries({
-                        StudioIds: firstItem.Id,
-                        Recursive: true,
-                        SortBy,
-                        MediaTypes: MediaType.Video
-                    }, queryOptions));
+                    return getItemsForPlayback(serverId, {
+                        studioIds: [firstItem.Id],
+                        recursive: true,
+                        sortBy: [sortBy],
+                        mediaTypes: [MediaType.Video],
+                        ...queryOptions
+                    });
                 case BaseItemKind.Person:
-                    return getItemsForPlayback(serverId, mergePlaybackQueries({
-                        PersonIds: firstItem.Id,
-                        ParentId: firstItem.ParentId,
-                        Recursive: true,
-                        SortBy,
-                        MediaTypes: MediaType.Video
-                    }, queryOptions));
+                    return getItemsForPlayback(serverId, {
+                        personIds: [firstItem.Id],
+                        parentId: firstItem.ParentId,
+                        recursive: true,
+                        sortBy: [sortBy],
+                        mediaTypes: [MediaType.Video],
+                        ...queryOptions
+                    });
                 case BaseItemKind.Series:
                 case BaseItemKind.Season:
                     return getSeriesOrSeasonPlaybackPromise(firstItem, options, items);
@@ -1908,15 +1937,16 @@ export class PlaybackManager {
 
         function getNonItemTypePromise(firstItem, serverId, options, queryOptions) {
             if (firstItem.MediaType === 'Photo') {
-                return getItemsForPlayback(serverId, mergePlaybackQueries({
-                    ParentId: firstItem.ParentId,
-                    Filters: 'IsNotFolder',
+                return getItemsForPlayback(serverId, {
+                    parentId: firstItem.ParentId,
+                    filters: [ItemFilter.IsNotFolder],
                     // Setting this to true may cause some incorrect sorting
-                    Recursive: false,
-                    SortBy: options.shuffle ? 'Random' : 'SortName',
-                    MediaTypes: 'Photo,Video',
-                    Limit: UNLIMITED_ITEMS
-                }, queryOptions)).then(function (result) {
+                    recursive: false,
+                    sortBy: [options.shuffle ? ItemSortBy.Random : ItemSortBy.SortName],
+                    mediaTypes: [MediaType.Photo, MediaType.Video],
+                    limit: UNLIMITED_ITEMS,
+                    ...queryOptions
+                }).then(function (result) {
                     const playbackItems = result.Items;
 
                     let index = playbackItems.map(function (i) {
@@ -1932,44 +1962,52 @@ export class PlaybackManager {
                     return Promise.resolve(result);
                 });
             } else if (firstItem.IsFolder && firstItem.CollectionType === 'homevideos') {
-                return getItemsForPlayback(serverId, mergePlaybackQueries({
-                    ParentId: firstItem.Id,
-                    Filters: 'IsNotFolder',
-                    Recursive: true,
-                    SortBy: options.shuffle ? 'Random' : 'SortName',
+                return getItemsForPlayback(serverId, {
+                    parentId: firstItem.Id,
+                    filters: [ItemFilter.IsNotFolder],
+                    recursive: true,
+                    sortBy: [options.shuffle ? ItemSortBy.Random : ItemSortBy.SortName],
                     // Only include Photos because we do not handle mixed queues currently
-                    MediaTypes: 'Photo',
-                    Limit: UNLIMITED_ITEMS
-                }, queryOptions));
+                    mediaTypes: [MediaType.Photo],
+                    limit: UNLIMITED_ITEMS,
+                    ...queryOptions
+                });
             } else if (firstItem.IsFolder && firstItem.CollectionType === 'musicvideos') {
-                return getItemsForPlayback(serverId, mergePlaybackQueries({
-                    ParentId: firstItem.Id,
-                    Filters: 'IsFolder',
-                    Recursive: true,
-                    SortBy: options.shuffle ? 'Random' : 'SortName',
-                    MediaTypes: 'Video',
-                    Limit: UNLIMITED_ITEMS
-                }, queryOptions));
+                return getItemsForPlayback(serverId, {
+                    parentId: firstItem.Id,
+                    filters: [ItemFilter.IsNotFolder],
+                    recursive: true,
+                    sortBy: [options.shuffle ? ItemSortBy.Random : ItemSortBy.SortName],
+                    mediaTypes: [MediaType.Video],
+                    limit: UNLIMITED_ITEMS,
+                    ...queryOptions
+                });
             } else if (firstItem.IsFolder) {
-                let sortBy = null;
+                let sortBy;
                 if (options.shuffle) {
-                    sortBy = 'Random';
+                    sortBy = [ItemSortBy.Random];
                 } else if (firstItem.Type !== 'BoxSet') {
                     if (firstItem.CollectionType === 'music' || firstItem.MediaType === 'Audio') {
-                        sortBy = 'Album,ParentIndexNumber,IndexNumber,SortName';
+                        sortBy = [
+                            ItemSortBy.Album,
+                            ItemSortBy.ParentIndexNumber,
+                            ItemSortBy.IndexNumber,
+                            ItemSortBy.SortName
+                        ];
                     } else {
-                        sortBy = 'SortName';
+                        sortBy = [ItemSortBy.SortName];
                     }
                 }
 
-                return getItemsForPlayback(serverId, mergePlaybackQueries({
-                    ParentId: firstItem.Id,
-                    Filters: 'IsNotFolder',
-                    Recursive: true,
+                return getItemsForPlayback(serverId, {
+                    parentId: firstItem.Id,
+                    filters: [ItemFilter.IsNotFolder],
+                    recursive: true,
                     // These are pre-sorted
-                    SortBy: sortBy,
-                    MediaTypes: 'Audio,Video'
-                }, queryOptions));
+                    sortBy,
+                    mediaTypes: [MediaType.Audio, MediaType.Video],
+                    ...queryOptions
+                });
             }
 
             return null;
@@ -1999,7 +2037,7 @@ export class PlaybackManager {
                 limit: seasonId ? undefined : 100,
                 SortBy: options.shuffle ? 'Random' : undefined,
                 UserId,
-                Fields: ['Chapters', 'Trickplay'],
+                Fields: [ItemFields.Chapters, ItemFields.MediaSources, ItemFields.Trickplay],
                 startItemId
             });
 
@@ -2056,7 +2094,7 @@ export class PlaybackManager {
                     IsVirtualUnaired: false,
                     IsMissing: false,
                     UserId: apiClient.getCurrentUserId(),
-                    Fields: ['Chapters', 'Trickplay'],
+                    Fields: [ItemFields.Chapters, ItemFields.MediaSources, ItemFields.Trickplay],
                     // limit to loading 100 episodes to avoid loading too large payload
                     limit: 100,
                     startItemId: Id
@@ -2067,11 +2105,21 @@ export class PlaybackManager {
         }
 
         function filterEpisodes(episodesResult, firstItem, options) {
+            let startItemFound = false;
             for (const [index, e] of episodesResult.Items.entries()) {
                 if (e.Id === firstItem.Id) {
                     episodesResult.StartIndex = index;
+                    startItemFound = true;
                     break;
                 }
+            }
+
+            // An alternate version is not part of the episode listing, so the result starts at
+            // its primary episode instead. Keep playing the version the user picked by selecting
+            // it as the media source of that primary (unless a source was explicitly chosen).
+            if (!startItemFound && episodesResult.Items.length) {
+                episodesResult.StartIndex = 0;
+                options.mediaSourceId = options.mediaSourceId || firstItem.Id;
             }
 
             // TODO: fix calling code to read episodesResult.StartIndex instead when set.
@@ -2081,7 +2129,13 @@ export class PlaybackManager {
         }
 
         self.translateItemsForPlayback = translateItemsForPlayback;
-        self.getItemsForPlayback = getItemsForPlayback;
+
+        /*
+         * Publicly exposed wrapper for getItemsForPlayback that supports existing callers that pass in PascalCase,
+         * comma-separated query parameters instead of the SDK standard items request.
+         * TODO: Replace with a direct call to getItemsForPlayback when the legacy query inputs are no longer supported.
+         */
+        self.getItemsForPlayback = (serverId, query) => getItemsForPlayback(serverId, toItemsRequest(query));
 
         self.play = async function (options) {
             normalizePlayOptions(options);
@@ -2108,14 +2162,14 @@ export class PlaybackManager {
                 }
 
                 items = (await getItemsForPlayback(options.serverId, {
-                    Ids: options.ids.join(',')
+                    ids: options.ids
                 })).Items;
             }
 
             // Prepare the list of items
             items = await translateItemsForPlayback(items, options);
             // Add any additional parts for movies or episodes
-            items = await getAdditionalParts(items);
+            items = await getAdditionalParts(items, options.mediaSourceId, options.startIndex || 0);
             // Adjust the start index for additional parts added to the queue
             if (options.startIndex) {
                 let adjustedStartIndex = 0;
@@ -2173,6 +2227,8 @@ export class PlaybackManager {
                 state.PlayState.IsPaused = player.paused();
                 state.PlayState.RepeatMode = self.getRepeatMode(player);
                 state.PlayState.ShuffleMode = self.getQueueShuffleMode(player);
+                // Needed for remote control because ShuffleMode doesn't exist in PlayerStateInfo from the server
+                state.PlayState.PlaybackOrder = state.PlayState.ShuffleMode === 'Shuffle' ? PlaybackOrder.Shuffle : PlaybackOrder.Default;
                 state.PlayState.MaxStreamingBitrate = self.getMaxStreamingBitrate(player);
 
                 state.PlayState.PositionTicks = getCurrentTicks(player);
@@ -2267,15 +2323,22 @@ export class PlaybackManager {
             return player.play(options);
         }
 
-        const getAdditionalParts = async (items) => {
-            const getItemAndParts = async function (item) {
+        const getAdditionalParts = async (items, mediaSourceId, startIndex) => {
+            const getItemAndParts = async function (item, isStartItem) {
                 if (
                     item.PartCount && item.PartCount > 1
                     && [ BaseItemKind.Episode, BaseItemKind.Movie ].includes(item.Type)
                 ) {
                     const client = ServerConnections.getApiClient(item.ServerId);
                     const user = await client.getCurrentUser();
-                    const additionalParts = await client.getAdditionalVideoParts(user.Id, item.Id);
+                    // When the user picked an alternate version, that version's MediaSourceId
+                    // equals its own BaseItem.Id, so use it to fetch the alternate's own
+                    // additional parts instead of the primary's - otherwise the primary's
+                    // stack parts would queue after the alternate finishes.
+                    const idForParts = (isStartItem && mediaSourceId && mediaSourceId !== item.Id) ?
+                        mediaSourceId :
+                        item.Id;
+                    const additionalParts = await client.getAdditionalVideoParts(user.Id, idForParts);
                     if (additionalParts.Items.length) {
                         return [ item, ...additionalParts.Items ];
                     }
@@ -2283,7 +2346,7 @@ export class PlaybackManager {
                 return [ item ];
             };
 
-            return Promise.all(items.map(getItemAndParts));
+            return Promise.all(items.map((item, index) => getItemAndParts(item, index === (startIndex || 0))));
         };
 
         function playWithIntros(items, options) {
@@ -2354,24 +2417,19 @@ export class PlaybackManager {
             // Normalize defaults to simplfy checks throughout the process
             normalizePlayOptions(playOptions);
 
-            if (playOptions.isFirstItem) {
-                playOptions.isFirstItem = false;
-            } else {
-                playOptions.isFirstItem = true;
-            }
-
-            const apiClient = ServerConnections.getApiClient(item.ServerId);
+            playOptions.isFirstItem = playOptions.isFirstItem || !prevSource;
 
             // TODO: This should be the media type requested, not the original media type
             const mediaType = item.MediaType;
 
-            if (playOptions.fullscreen) {
-                loading.show();
-            }
-
             return runInterceptors(item, playOptions)
                 .catch(onInterceptorRejection)
-                .then(() => detectBitrate(apiClient, item, mediaType))
+                .then(() => {
+                    if (playOptions.fullscreen) {
+                        loading.show();
+                    }
+                })
+                .then(() => detectBitrate(item, mediaType))
                 .then((bitrate) => {
                     return playAfterBitrateDetect(bitrate, item, playOptions, onPlaybackStartedFn, prevSource)
                         .catch(onPlaybackRejection);
@@ -2427,7 +2485,7 @@ export class PlaybackManager {
                 const interceptors = pluginManager.ofType(PluginType.PreplayIntercept);
 
                 interceptors.sort(function (a, b) {
-                    return (a.order || 0) - (b.order || 0);
+                    return (a.priority || 0) - (b.priority || 0);
                 });
 
                 if (!interceptors.length) {
@@ -2572,7 +2630,10 @@ export class PlaybackManager {
             }
         }
 
-        function detectBitrate(apiClient, item, mediaType) {
+        function detectBitrate(item, mediaType) {
+            const api = ServerConnections.getApi(item.ServerId);
+            const apiClient = ServerConnections.getApiClient(item.ServerId);
+
             // FIXME: This is gnarly, but don't want to change too much here in a bugfix
             return Promise.resolve()
                 .then(() => {
@@ -2583,10 +2644,11 @@ export class PlaybackManager {
                     return apiClient.getEndpointInfo()
                         .then((endpointInfo) => {
                             if ((mediaType === 'Video' || mediaType === 'Audio') && appSettings.enableAutomaticBitrateDetection(endpointInfo.IsInNetwork, mediaType)) {
-                                return apiClient.detectBitrate().then((bitrate) => {
-                                    appSettings.maxStreamingBitrate(endpointInfo.IsInNetwork, mediaType, bitrate);
-                                    return bitrate;
-                                });
+                                return bitrateTest.detectBitrate(api)
+                                    .then((bitrate) => {
+                                        appSettings.maxStreamingBitrate(endpointInfo.IsInNetwork, mediaType, bitrate);
+                                        return bitrate;
+                                    });
                             }
 
                             return Promise.reject(new Error('skip bitrate detection'));
@@ -2641,15 +2703,22 @@ export class PlaybackManager {
 
             const apiClient = ServerConnections.getApiClient(item.ServerId);
             const isLiveTv = [BaseItemKind.TvChannel, BaseItemKind.LiveTvChannel].includes(item.Type);
-            const getMediaStreams = isLiveTv ? Promise.resolve([]) : apiClient.getItem(apiClient.getCurrentUserId(), mediaSourceId || item.Id)
-                .then(fullItem => {
-                    return fullItem.MediaStreams;
-                });
+            const getSourceItem = isLiveTv ? Promise.resolve(null) : apiClient.getItem(apiClient.getCurrentUserId(), mediaSourceId || item.Id);
 
-            return Promise.all([promise, player.getDeviceProfile(item), apiClient.getCurrentUser(), getMediaStreams]).then(function (responses) {
+            return Promise.all([promise, player.getDeviceProfile(item), apiClient.getCurrentUser(), getSourceItem]).then(function (responses) {
                 const deviceProfile = responses[1];
                 const user = responses[2];
-                const mediaStreams = responses[3];
+                const sourceItem = responses[3];
+
+                // Queued items do not always carry their media sources, in which case the version
+                // to keep playing can only be matched on the item fetched for playback.
+                const versionSource = mediaSourceId ? null : getMatchingMediaSource(sourceItem?.MediaSources, prevSource);
+
+                if (versionSource) {
+                    mediaSourceId = versionSource.Id;
+                }
+
+                const mediaStreams = versionSource?.MediaStreams || sourceItem?.MediaStreams || [];
 
                 const audioStreamIndex = playOptions.audioStreamIndex;
                 const subtitleStreamIndex = playOptions.subtitleStreamIndex;
@@ -2711,7 +2780,9 @@ export class PlaybackManager {
                         mediaSource.DefaultSecondarySubtitleStreamIndex = -1;
                     }
 
-                    const streamInfo = createStreamInfo(apiClient, item.MediaType, item, mediaSource, startPosition, player);
+                    const playedItem = await getItemOfMediaSource(apiClient, item, mediaSource, sourceItem);
+
+                    const streamInfo = createStreamInfo(apiClient, item.MediaType, playedItem, mediaSource, startPosition, player);
                     streamInfo.aspectRatio = playOptions.aspectRatio;
                     streamInfo.fullscreen = playOptions.fullscreen;
 
@@ -2938,6 +3009,30 @@ export class PlaybackManager {
             return tracks;
         }
 
+        // Chapters and trickplay data belong to the item owning the played media source.
+        function getItemOfMediaSource(apiClient, item, mediaSource, sourceItem) {
+            if (!mediaSource.hasAlternateVersions || mediaSource.Id === item.Id) {
+                return Promise.resolve(item);
+            }
+
+            const getVersionItem = sourceItem?.Id === mediaSource.Id ?
+                Promise.resolve(sourceItem) :
+                apiClient.getItem(apiClient.getCurrentUserId(), mediaSource.Id).catch(() => null);
+
+            return getVersionItem.then(function (versionItem) {
+                if (!versionItem) {
+                    return item;
+                }
+
+                return {
+                    ...item,
+                    Chapters: versionItem.Chapters,
+                    // Trickplay manifests are keyed by media source, so they can just be added
+                    Trickplay: { ...item.Trickplay, ...versionItem.Trickplay }
+                };
+            });
+        }
+
         function getPlaybackMediaSource(player, apiClient, deviceProfile, item, mediaSourceId, options) {
             options.isPlayback = true;
 
@@ -2945,6 +3040,11 @@ export class PlaybackManager {
                 if (validatePlaybackInfoResult(self, playbackInfoResult)) {
                     return getOptimalMediaSource(apiClient, item, playbackInfoResult.MediaSources).then(function (mediaSource) {
                         if (mediaSource) {
+                            // Remember whether alternate versions exists
+                            mediaSource.hasAlternateVersions = playbackInfoResult.MediaSources.length > 1
+                                || item.MediaSources?.length > 1
+                                || (!!mediaSourceId && mediaSourceId !== item.Id);
+
                             if (mediaSource.RequiresOpening && !mediaSource.LiveStreamId) {
                                 options.audioStreamIndex = null;
                                 options.subtitleStreamIndex = null;
@@ -2952,6 +3052,7 @@ export class PlaybackManager {
                                 return getLiveStream(player, apiClient, item, playbackInfoResult.PlaySessionId, deviceProfile, mediaSource, options).then(function (openLiveStreamResult) {
                                     return supportsDirectPlay(apiClient, item, openLiveStreamResult.MediaSource).then(function (result) {
                                         openLiveStreamResult.MediaSource.enableDirectPlay = result;
+                                        openLiveStreamResult.MediaSource.hasAlternateVersions = mediaSource.hasAlternateVersions;
                                         return openLiveStreamResult.MediaSource;
                                     });
                                 });
@@ -3119,6 +3220,18 @@ export class PlaybackManager {
             };
         }
 
+        // Find the version (media source) whose name matches the currently playing version,
+        // so track navigation keeps the same version across episodes.
+        function getMatchingMediaSource(mediaSources, prevSource) {
+            const versionName = prevSource?.Name;
+
+            if (!versionName || !prevSource.hasAlternateVersions || (mediaSources?.length ?? 0) < 2) {
+                return null;
+            }
+
+            return mediaSources.find(source => source.Name === versionName);
+        }
+
         self.nextTrack = function (player) {
             player = player || self._currentPlayer;
             if (player && !enableLocalPlaylistManagement(player)) {
@@ -3130,11 +3243,17 @@ export class PlaybackManager {
             if (newItemInfo) {
                 console.debug('playing next track');
 
+                const prevSource = getPreviousSource(player);
                 const newItemPlayOptions = newItemInfo.item.playOptions || getDefaultPlayOptions();
+                const versionSource = getMatchingMediaSource(newItemInfo.item.MediaSources, prevSource);
+
+                if (versionSource) {
+                    newItemPlayOptions.mediaSourceId = versionSource.Id;
+                }
 
                 playInternal(newItemInfo.item, newItemPlayOptions, function () {
                     setPlaylistState(newItemInfo.item.PlaylistItemId, newItemInfo.index);
-                }, getPreviousSource(player));
+                }, prevSource);
             }
         };
 
@@ -3150,12 +3269,18 @@ export class PlaybackManager {
                 const newItem = playlist[newIndex];
 
                 if (newItem) {
+                    const prevSource = getPreviousSource(player);
                     const newItemPlayOptions = newItem.playOptions || getDefaultPlayOptions();
                     newItemPlayOptions.startPositionTicks = 0;
+                    const versionSource = getMatchingMediaSource(newItem.MediaSources, prevSource);
+
+                    if (versionSource) {
+                        newItemPlayOptions.mediaSourceId = versionSource.Id;
+                    }
 
                     playInternal(newItem, newItemPlayOptions, function () {
                         setPlaylistState(newItem.PlaylistItemId, newIndex);
-                    }, getPreviousSource(player));
+                    }, prevSource);
                 }
             }
         };
@@ -3186,7 +3311,7 @@ export class PlaybackManager {
                 }
 
                 return getItemsForPlayback(options.serverId, {
-                    Ids: options.ids.join(',')
+                    ids: options.ids
                 }).then(function (result) {
                     return translateItemsForPlayback(result.Items, options).then(function (items) {
                         // TODO: Handle options.startIndex for photos
@@ -3726,13 +3851,24 @@ export class PlaybackManager {
         };
 
         if (appHost.supports(AppFeature.RemoteControl)) {
-            import('../../scripts/serverNotifications').then(({ default: serverNotifications }) => {
-                Events.on(serverNotifications, 'ServerShuttingDown', self.setDefaultPlayerActive.bind(self));
-                Events.on(serverNotifications, 'ServerRestarting', self.setDefaultPlayerActive.bind(self));
+            // Defer setup past module evaluation to avoid the circular dependency:
+            // playbackmanager → lib/jellyfin-apiclient → ServerConnections → utils/dashboard → backdrop → playbackmanager
+            queueMicrotask(() => {
+                let _unsubscribeRemoteControl;
+                Events.on(ServerConnections, 'localusersignedin', () => {
+                    _unsubscribeRemoteControl?.();
+                    const api = ServerConnections.getApi();
+                    _unsubscribeRemoteControl = api?.subscribe(
+                        [OutboundWebSocketMessageType.ServerShuttingDown, OutboundWebSocketMessageType.ServerRestarting],
+                        self.setDefaultPlayerActive.bind(self)
+                    );
+                });
+                Events.on(ServerConnections, 'localusersignedout', () => {
+                    _unsubscribeRemoteControl?.();
+                });
             });
         }
 
-        bindMediaSegmentManager(self);
         this._skipSegment = bindSkipSegment(self);
     }
 
@@ -3882,6 +4018,19 @@ export class PlaybackManager {
         const offsetTicks = 0 - (userSettings.skipBackLength() * 10000);
 
         this.seekRelative(offsetTicks, player);
+    }
+
+    seekFrames(frames = 1, player = this._currentPlayer) {
+        // Only allow seeking by frames when paused
+        if (!player.paused()) return;
+
+        const source = this.currentMediaSource(player);
+        const videoStream = source?.MediaStreams?.find(s => s.Type === MediaType.Video);
+        // It only makes sense to seek video streams by frames
+        if (videoStream) {
+            const fps = videoStream.ReferenceFrameRate || 24;
+            this.seekRelative(frames / fps * TICKS_PER_SECOND, player);
+        }
     }
 
     seekPercent(percent, player = this._currentPlayer) {
